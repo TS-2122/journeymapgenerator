@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Journey Map Builder</title>
+<script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
+</head>
+<body>
+<script>
+  // Headless entry point. Miro loads this page and opens the panel when the app icon is clicked.
+  miro.board.ui.on('icon:click', async () => {
+    await miro.board.ui.openPanel({ url: 'panel.html' });
+  });
+</script>
+</body>
+</html>
