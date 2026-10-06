@@ -3,7 +3,7 @@
 
   const KEY = 'jmb-state-v1';
   const PALETTE = ['#2E3FB8', '#2F7D32', '#D9731A', '#7040C4', '#B3261E', '#00838F', '#6D4C41', '#455A64'];
-  const DEFAULT_EMOJIS = ['\u{1F623}', '\u{1F615}', '\u{1F610}', '\u{1F642}', '\u{1F604}'];
+  const DEFAULT_EMOJIS = ['\u{1F620}', '\u{1F615}', '\u{1F610}', '\u{1F642}', '\u{1F604}'];
   const EMOJI_CHOICES = ['\u{1F621}', '\u{1F620}', '\u{1F62D}', '\u{1F622}', '\u{1F623}', '\u{1F629}', '\u{1F61E}', '\u{1F615}', '\u{1F641}', '\u{1F610}', '\u{1F611}', '\u{1F636}', '\u{1F642}', '\u{1F60A}', '\u{1F600}', '\u{1F604}', '\u{1F601}', '\u{1F60D}', '\u{1F929}', '\u{1F973}'];
   const SCALE_LABELS = ['Very negative', 'Negative', 'Neutral', 'Positive', 'Very positive'];
   const STEPS = ['Details', 'Personas', 'Stages', 'Content', 'Feelings'];
@@ -381,6 +381,12 @@
     const el = root.querySelector('.status'); if (el) el.textContent = msg;
   };
 
+  function doneMsg(res, ok) {
+    if (!res.errors || !res.errors.length) return ok;
+    return 'Map built, but ' + res.errors.length + ' piece' + (res.errors.length === 1 ? '' : 's') +
+      ' could not be added. First problem: ' + res.errors[0] + '. You can fix the content and click Update map.';
+  }
+
   function canBuild() {
     if (!window.miro || !miro.board) { ui.status = 'Open this panel inside Miro to build the map.'; return false; }
     if (!S.stages.length) { ui.status = 'Add at least one stage first.'; return false; }
@@ -391,13 +397,13 @@
     if (!canBuild()) { render(); return; }
     ui.busy = true; ui.status = 'Starting...'; render();
     try {
-      const res = await window.JMB_generate(S, sayStatus);
+      const res = await window.JMB_generate(S, sayStatus, { onFrame: (f) => { S.link = { frameId: f.id, connectorIds: [] }; save(); } });
       S.link = { frameId: res.frame.id, connectorIds: res.connectorIds };
       save();
-      ui.status = 'Map added to the board. Use "Update map" to change it from now on.';
+      ui.status = doneMsg(res, 'Map added to the board. Use "Update map" to change it from now on.');
     } catch (err) {
       console.error(err);
-      ui.status = 'The map stopped partway: ' + ((err && err.message) || err) + '. Delete the partial frame and try again.';
+      ui.status = 'The map stopped partway: ' + ((err && err.message) || err) + '. Click Update map to try again.';
     }
     ui.busy = false; render();
   }
@@ -412,10 +418,10 @@
         ui.status = 'The map is no longer on this board. Select it on the board and try again, or generate a new one.';
       } else {
         const origin = await window.JMB_removeMap(frame, S.link && S.link.connectorIds, sayStatus);
-        const res = await window.JMB_generate(S, sayStatus, { origin });
+        const res = await window.JMB_generate(S, sayStatus, Object.assign({ origin }, { onFrame: (f) => { S.link = { frameId: f.id, connectorIds: [] }; save(); } }));
         S.link = { frameId: res.frame.id, connectorIds: res.connectorIds };
         save();
-        ui.status = 'Map updated.';
+        ui.status = doneMsg(res, 'Map updated.');
       }
     } catch (err) {
       console.error(err);
