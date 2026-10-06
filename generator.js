@@ -45,53 +45,48 @@
 
   const textW = (s, size) => Math.ceil(String(s).length * size * 0.6) + 24;
 
-  // Miro shapes put left aligned text right against the edge, so the card text is
-  // wrapped here and each line gets a small indent. The wrap width is kept on the
-  // narrow side so Miro does not re-wrap a line and lose its indent.
-  const PAD = '\u00A0\u00A0\u00A0';
-  const HANG = '\u00A0\u00A0\u00A0\u00A0';
-  const CPL = Math.floor((L.stageW - 2 * L.pad - 30) / (L.font * 0.6));
+  // Each card is drawn as an empty rounded box with separate text items placed on top
+  // of it. Miro text items wrap and pad correctly the moment they are created, so the
+  // card no longer needs a double click to settle its spacing.
+  const SYM_W = 16;        // room for the check, x, or arrow symbol
+  const PILL_H = 22;
+  const PILL_GAP = 4;
 
-  function wrap(text, width) {
-    const out = [];
-    String(text).split('\n').forEach((par) => {
-      let line = '';
-      par.split(/\s+/).filter(Boolean).forEach((w) => {
-        while (w.length > width) {
-          if (line) { out.push(line); line = ''; }
-          out.push(w.slice(0, width)); w = w.slice(width);
-        }
-        if (!line) line = w;
-        else if ((line + ' ' + w).length <= width) line += ' ' + w;
-        else { out.push(line); line = w; }
-      });
-      out.push(line);
-    });
-    return out.length ? out : [''];
-  }
-  const cardLines = (text, prefix) => wrap(text, CPL - (prefix ? 2 : 0));
-  const cardHTML = (text, prefix) => cardLines(text, prefix)
-    .map((l, i) => esc(PAD + (i === 0 ? prefix : (prefix ? HANG : '')) + l)).join('<br>');
+  const pillW = (name) => textW(name, 10);
   const cardPersonas = (item, personas) => personas.filter((p) => (item.personas || []).includes(p.id));
 
-  // Lays out small persona pills inside the bottom of a card. Returns rows of {p, x, w}.
-  function pillRows(list, width) {
-    const rows = [[]]; let x = 0;
-    list.forEach((p) => {
-      const w = textW(p.name, 10) - 6;
-      if (x && x + w > width) { rows.push([]); x = 0; }
-      rows[rows.length - 1].push({ p, x, w }); x += w + 6;
+  function wrapCount(text, width) {
+    const cpl = Math.max(8, Math.floor(width / (L.font * 0.56)));
+    let n = 0;
+    String(text).split('\n').forEach((par) => {
+      let line = 0;
+      n++;
+      par.split(/\s+/).filter(Boolean).forEach((w) => {
+        if (!line) line = w.length;
+        else if (line + 1 + w.length <= cpl) line += 1 + w.length;
+        else { n++; line = w.length; }
+        while (line > cpl) { n++; line -= cpl; }
+      });
     });
-    return list.length ? rows : [];
+    return Math.max(1, n);
   }
 
-  function cardH(item, kind, personas) {
+  // Works out the pieces of one card: where the text sits, how wide it can be,
+  // and the column of persona pills on the right.
+  function cardLayout(item, kind, personas) {
     const k = KIND[kind] || KIND.note;
-    let h = Math.ceil(cardLines(item.text, k.prefix).length * L.font * 1.5 + 18);
-    if (kind !== 'actions') h += pillRows(cardPersonas(item, personas), L.stageW - 2 * L.pad - 20).length * 26;
-    return Math.max(34, h);
+    const cw = L.stageW - 2 * L.pad;
+    const pills = kind === 'actions' ? [] : cardPersonas(item, personas);
+    const pillCol = pills.length ? Math.max(...pills.map((p) => pillW(p.name))) + 10 : 0;
+    const symW = k.prefix ? SYM_W : 0;
+    const textX = 10 + symW;
+    const textWidth = cw - textX - 10 - pillCol;
+    const lines = wrapCount(item.text, textWidth);
+    const textH = Math.ceil(lines * L.font * 1.45);
+    const pillsH = pills.length ? pills.length * PILL_H + (pills.length - 1) * PILL_GAP : 0;
+    const h = Math.max(36, Math.max(textH, pillsH) + 18);
+    return { k, cw, pills, pillCol, symW, textX, textWidth, h };
   }
-
 
   function stageTags(stage, personas, rowKey) {
     const used = new Set();
@@ -132,7 +127,7 @@
         const items = (s.cells[r.key] || []).filter((i) => i.text.trim());
         let h = L.pad * 2;
         if (r.kind === 'actions' && stageTags(s, personas, r.key).length) h += L.tagH + L.gap;
-        items.forEach((i) => { h += cardH(i, r.kind, personas) + L.gap; });
+        items.forEach((i) => { h += cardLayout(i, r.kind, personas).h + L.gap; });
         max = Math.max(max, h);
       });
       return Math.max(96, max);
@@ -213,7 +208,7 @@
       const w = textW(t, 11);
       fg.push(shape(tx, oy + 88, w, 24,
         { fillColor: NAVY, borderColor: '#8FA1B5', color: '#E4EAF1', fontSize: 11, textAlign: 'center', textAlignVertical: 'middle' },
-        esc(t), 'round_rectangle'));
+        esc(t), 'flow_chart_terminator'));
       tx += w + 8;
     });
 
@@ -258,33 +253,39 @@
             const w = textW(p.name, 11);
             fg.push(shape(tagX, cy, w, 22,
               { fillColor: tint(p.color, 0.85), borderColor: tint(p.color, 0.6), color: p.color, fontSize: 11, textAlign: 'center', textAlignVertical: 'middle' },
-              '<strong>' + esc(p.name) + '</strong>', 'round_rectangle'));
+              '<strong>' + esc(p.name) + '</strong>', 'flow_chart_terminator'));
             tagX += w + 6;
           });
           if (tags.length) cy += L.tagH + L.gap;
         }
         (s.cells[r.key] || []).filter((i) => i.text.trim()).forEach((item) => {
-          const h = cardH(item, r.kind, personas);
-          const top = cy;
-          const pills = r.kind === 'actions' ? [] : pillRows(cardPersonas(item, personas), cw - 20);
+          const c = cardLayout(item, r.kind, personas);
+          const top = cy, mid = cy + c.h / 2;
           fg.push(async () => {
-            const card = await shape(cx, top, cw, h,
-              { fillColor: k.card, borderColor: k.border, color: k.text, fontSize: L.font, textAlign: 'left', textAlignVertical: pills.length ? 'top' : 'middle' },
-              cardHTML(item.text, k.prefix), 'round_rectangle')();
-            if (!pills.length) return card;
-            const parts = [card];
-            const baseY = top + h - pills.length * 26 - 4;
-            for (let ri = 0; ri < pills.length; ri++) {
-              for (const { p, x, w } of pills[ri]) {
-                parts.push(await shape(cx + 10 + x, baseY + ri * 26, w, 20,
+            const parts = [];
+            parts.push(await shape(cx, top, c.cw, c.h,
+              { fillColor: c.k.card, borderColor: c.k.border }, '', 'round_rectangle')());
+            if (c.k.prefix) {
+              parts.push(await text(cx + 8, mid, c.symW, esc(c.k.prefix.trim()),
+                { color: c.k.text, fontSize: L.font, textAlign: 'center' })());
+            }
+            parts.push(await text(cx + c.textX, mid, c.textWidth, esc(item.text).replace(/\n/g, '<br>'),
+              { color: c.k.text, fontSize: L.font, textAlign: 'left' })());
+            if (c.pills.length) {
+              const colX = cx + c.cw - 10 - (c.pillCol - 10);
+              let py = mid - ((c.pills.length * PILL_H + (c.pills.length - 1) * PILL_GAP) / 2);
+              for (const p of c.pills) {
+                const w = pillW(p.name);
+                parts.push(await shape(colX + (c.pillCol - 10 - w), py, w, PILL_H,
                   { fillColor: tint(p.color, 0.85), borderColor: tint(p.color, 0.6), color: p.color, fontSize: 10, textAlign: 'center', textAlignVertical: 'middle' },
-                  '<strong>' + esc(p.name) + '</strong>', 'round_rectangle')());
+                  '<strong>' + esc(p.name) + '</strong>', 'flow_chart_terminator')());
+                py += PILL_H + PILL_GAP;
               }
             }
             groups.push(parts);
-            return card;
+            return parts[0];
           });
-          cy += h + L.gap;
+          cy += c.h + L.gap;
         });
       });
     });
