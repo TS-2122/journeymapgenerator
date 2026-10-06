@@ -185,20 +185,36 @@
       style: { fillColor: '#ffffff' }
     });
 
+    if (opts.onFrame) opts.onFrame(frame);
+
+    // Every board call goes through safe(): a failure or a call that never answers is
+    // recorded and skipped, so one bad item can't stop the whole map.
+    const errors = [];
+    const safe = (label, fn) => Promise.race([
+      Promise.resolve().then(fn),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('no response from Miro')), 20000))
+    ]).catch((e) => { errors.push(label + ': ' + ((e && e.message) || e)); console.error(label, e); return null; });
+
     const created = [];
     const groups = [];
-    const shape = (x, y, w, h, style, content, kind) => () =>
+    const shape = (x, y, w, h, style, content, kind) => () => safe('shape', () =>
       board.createShape({
         shape: kind || 'rectangle',
         content: content || '',
         x: x + w / 2, y: y + h / 2, width: w, height: h,
         style: Object.assign({ fontFamily: BODY_FONT, fontSize: 12, borderWidth: 1 }, style)
-      }).then((it) => { created.push(it); return it; });
-    const text = (x, y, w, content, style) => () =>
+      })).then((it) => { if (it) created.push(it); return it; });
+    const text = (x, y, w, content, style) => () => safe('text', () =>
       board.createText({
         content, x: x + w / 2, y, width: w,
         style: Object.assign({ fontFamily: BODY_FONT, fontSize: 12, textAlign: 'left' }, style)
-      }).then((it) => { created.push(it); return it; });
+      })).then((it) => { if (it) created.push(it); return it; });
+    const connect = (a, b, style, kind) => (a && b) ? safe('line', () => board.createConnector({
+      shape: kind,
+      start: { item: a.id, position: { x: 1, y: 0.5 } },
+      end: { item: b.id, position: { x: 0, y: 0.5 } },
+      style
+    })).then((c) => { if (c) connectorIds.push(c.id); return c; }) : Promise.resolve(null);
     const noBorder = { borderOpacity: 0, borderColor: '#ffffff' };
 
     // Phase 1: backgrounds and cells.
@@ -319,8 +335,9 @@
                 py += PILL_H + PILL_GAP;
               }
             }
-            groups.push(parts);
-            return parts[0];
+            const ok = parts.filter(Boolean);
+            if (ok.length > 1) groups.push(ok);
+            return ok[0];
           });
           cy += c.h + L.gap;
         });
@@ -334,18 +351,12 @@
     if (feel) {
       say('Drawing feelings...');
       const midY = feel.level(3);
-      const anchorStyle = { fillColor: '#FFFFFF', fillOpacity: 0, borderOpacity: 0, borderColor: '#FFFFFF' };
+      const anchorStyle = { fillColor: '#FFFFFF', fillOpacity: 0, borderOpacity: 0, borderColor: '#FFFFFF', borderWidth: 1 };
       const [a1, a2] = await runAll([
-        shape(ox + L.labelW + 4, midY - 4, 8, 8, anchorStyle, '', 'circle'),
-        shape(ox + totalW - 12, midY - 4, 8, 8, anchorStyle, '', 'circle')
+        shape(ox + L.labelW + 4, midY - 6, 12, 12, anchorStyle, '', 'circle'),
+        shape(ox + totalW - 16, midY - 6, 12, 12, anchorStyle, '', 'circle')
       ], 2);
-      const ln = await board.createConnector({
-        shape: 'straight',
-        start: { item: a1.id, position: { x: 1, y: 0.5 } },
-        end: { item: a2.id, position: { x: 0, y: 0.5 } },
-        style: { strokeColor: '#9AA5B4', strokeWidth: 2, strokeStyle: 'dashed', startStrokeCap: 'none', endStrokeCap: 'none' }
-      });
-      connectorIds.push(ln.id);
+      await connect(a1, a2, { strokeColor: '#9AA5B4', strokeWidth: 2, strokeStyle: 'dashed', startStrokeCap: 'none', endStrokeCap: 'none' }, 'straight');
 
       const spread = personas.length > 1 ? 16 : 0;
       for (let pi = 0; pi < personas.length; pi++) {
@@ -361,15 +372,9 @@
             { fillColor: '#FFFFFF', borderColor: p.color, borderWidth: 3, fontSize: 20, textAlign: 'center', textAlignVertical: 'middle' },
             emojis[v - 1], 'circle'));
         });
-        const dots = await runAll(jobs, 6);
+        const dots = (await runAll(jobs, 6)).filter(Boolean);
         for (let i = 1; i < dots.length; i++) {
-          const cn = await board.createConnector({
-            shape: 'curved',
-            start: { item: dots[i - 1].id, position: { x: 1, y: 0.5 } },
-            end: { item: dots[i].id, position: { x: 0, y: 0.5 } },
-            style: { strokeColor: p.color, strokeWidth: 4, startStrokeCap: 'none', endStrokeCap: 'none' }
-          });
-          connectorIds.push(cn.id);
+          await connect(dots[i - 1], dots[i], { strokeColor: p.color, strokeWidth: 4, startStrokeCap: 'none', endStrokeCap: 'none' }, 'curved');
         }
         say('Drawing feelings... ' + (pi + 1) + ' of ' + personas.length + ' personas');
       }
@@ -378,18 +383,18 @@
     // Put everything inside the frame so it moves as one piece.
     say('Grouping into frame...');
     for (let i = 0; i < created.length; i += 20) {
-      await Promise.all(created.slice(i, i + 20).map((it) => frame.add(it).catch(() => null)));
+      await Promise.all(created.slice(i, i + 20).map((it) => safe('frame', () => frame.add(it))));
     }
 
     // Group each card with its persona pills so they move together.
     if (typeof board.group === 'function') {
       for (const parts of groups) {
-        try { await board.group({ items: parts }); } catch (e) { /* leave ungrouped */ }
+        await safe('group', () => board.group({ items: parts }));
       }
     }
 
-    try { await frame.setMetadata('jmb', { connectorIds }); } catch (e) { /* metadata is optional */ }
-    await board.viewport.zoomTo(frame);
-    return { frame, connectorIds };
+    await safe('tag', () => frame.setMetadata('jmb', { connectorIds }));
+    await safe('zoom', () => board.viewport.zoomTo(frame));
+    return { frame, connectorIds, errors };
   };
 })();
