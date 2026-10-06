@@ -43,6 +43,14 @@
     return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
   }
 
+  // Dates from the picker arrive as 2026-10-06 and show on the map as October 6, 2026.
+  function fmtDate(d) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || '');
+    if (!m) return d || '';
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    return months[+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1];
+  }
+
   const textW = (s, size) => Math.ceil(String(s).length * size * 0.6) + 24;
 
   // Each card is drawn as an empty rounded box with separate text items placed on top
@@ -261,7 +269,7 @@
       const w = textW(t, 11);
       fg.push(shape(tx, oy + 88, w, 24,
         { fillColor: NAVY, borderColor: '#8FA1B5', color: '#E4EAF1', fontSize: 11, textAlign: 'center', textAlignVertical: 'middle' },
-        esc(t), 'flow_chart_terminator'));
+        esc(t), 'round_rectangle'));
       tx += w + 8;
     });
 
@@ -276,7 +284,7 @@
       px += w + 30;
     });
 
-    const footerText = [S.footer, S.project, S.date].filter(Boolean).map(esc).join('     \u2022     ');
+    const footerText = [S.footer, S.project, fmtDate(S.date)].filter(Boolean).map(esc).join('     \u2022     ');
     if (footerText) {
       fg.push(text(ox + 24, y + L.footerH / 2, totalW - 48, footerText, { color: '#E4EAF1', fontSize: 12 }));
     }
@@ -306,7 +314,7 @@
             const w = textW(p.name, 11);
             fg.push(shape(tagX, cy, w, 22,
               { fillColor: tint(p.color, 0.85), borderColor: tint(p.color, 0.6), color: p.color, fontSize: 11, textAlign: 'center', textAlignVertical: 'middle' },
-              '<strong>' + esc(p.name) + '</strong>', 'flow_chart_terminator'));
+              '<strong>' + esc(p.name) + '</strong>', 'round_rectangle'));
             tagX += w + 6;
           });
           if (tags.length) cy += L.tagH + L.gap;
@@ -331,7 +339,7 @@
                 const w = pillW(p.name);
                 parts.push(await shape(colX + (c.pillCol - 10 - w), py, w, PILL_H,
                   { fillColor: tint(p.color, 0.85), borderColor: tint(p.color, 0.6), color: p.color, fontSize: 10, textAlign: 'center', textAlignVertical: 'middle' },
-                  '<strong>' + esc(p.name) + '</strong>', 'flow_chart_terminator')());
+                  '<strong>' + esc(p.name) + '</strong>', 'round_rectangle')());
                 py += PILL_H + PILL_GAP;
               }
             }
