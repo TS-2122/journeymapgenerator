@@ -110,7 +110,42 @@
     return out;
   }
 
-  window.JMB_generate = async function (S, progress) {
+  // Finds a map this app built earlier, by its stored frame id or the current selection.
+  window.JMB_findMap = async function (frameId) {
+    const board = miro.board;
+    if (frameId) {
+      try { const f = await board.getById(frameId); if (f && f.type === 'frame') return f; } catch (e) { /* gone */ }
+    }
+    try {
+      const sel = await board.getSelection();
+      for (const it of sel) {
+        if (it.type !== 'frame') continue;
+        try { if (await it.getMetadata('jmb')) return it; } catch (e) { /* not ours */ }
+      }
+    } catch (e) { /* no selection */ }
+    return null;
+  };
+
+  // Deletes an existing map: its connectors, everything inside the frame, then the frame.
+  window.JMB_removeMap = async function (frame, connectorIds, say) {
+    const board = miro.board;
+    let ids = connectorIds || [];
+    try { const m = await frame.getMetadata('jmb'); if (m && m.connectorIds) ids = ids.concat(m.connectorIds); } catch (e) { /* none */ }
+    const jobs = [];
+    [...new Set(ids)].forEach((id) => jobs.push(async () => {
+      try { const c = await board.getById(id); if (c) await board.remove(c); } catch (e) { /* already gone */ }
+    }));
+    let kids = [];
+    try { kids = await frame.getChildren(); } catch (e) { /* none */ }
+    kids.forEach((k) => jobs.push(() => board.remove(k).catch(() => null)));
+    await runAll(jobs, 6, (d, t) => say && say('Clearing old map... ' + d + ' of ' + t));
+    const box = { x: frame.x - frame.width / 2, y: frame.y - frame.height / 2 };
+    await board.remove(frame).catch(() => null);
+    return box;
+  };
+
+  window.JMB_generate = async function (S, progress, opts) {
+    opts = opts || {};
     const say = progress || function () {};
     const board = miro.board;
     const rows = S.rows.filter((r) => r.on);
@@ -137,8 +172,10 @@
     const totalH = bodyTop + rowH.reduce((a, b) => a + b, 0) + L.footerH;
 
     const vp = await board.viewport.get();
-    const ox = Math.round(vp.x + vp.width / 2 - totalW / 2);
-    const oy = Math.round(vp.y + vp.height / 2 - totalH / 2);
+    // An update rebuilds the map at the same top left corner as the old one.
+    const ox = opts.origin ? Math.round(opts.origin.x) : Math.round(vp.x + vp.width / 2 - totalW / 2);
+    const oy = opts.origin ? Math.round(opts.origin.y) : Math.round(vp.y + vp.height / 2 - totalH / 2);
+    const connectorIds = [];
 
     say('Creating frame...');
     const frame = await board.createFrame({
@@ -302,12 +339,13 @@
         shape(ox + L.labelW + 4, midY - 4, 8, 8, anchorStyle, '', 'circle'),
         shape(ox + totalW - 12, midY - 4, 8, 8, anchorStyle, '', 'circle')
       ], 2);
-      await board.createConnector({
+      const ln = await board.createConnector({
         shape: 'straight',
         start: { item: a1.id, position: { x: 1, y: 0.5 } },
         end: { item: a2.id, position: { x: 0, y: 0.5 } },
         style: { strokeColor: '#9AA5B4', strokeWidth: 2, strokeStyle: 'dashed', startStrokeCap: 'none', endStrokeCap: 'none' }
       });
+      connectorIds.push(ln.id);
 
       const spread = personas.length > 1 ? 16 : 0;
       for (let pi = 0; pi < personas.length; pi++) {
@@ -325,12 +363,13 @@
         });
         const dots = await runAll(jobs, 6);
         for (let i = 1; i < dots.length; i++) {
-          await board.createConnector({
+          const cn = await board.createConnector({
             shape: 'curved',
             start: { item: dots[i - 1].id, position: { x: 1, y: 0.5 } },
             end: { item: dots[i].id, position: { x: 0, y: 0.5 } },
             style: { strokeColor: p.color, strokeWidth: 4, startStrokeCap: 'none', endStrokeCap: 'none' }
           });
+          connectorIds.push(cn.id);
         }
         say('Drawing feelings... ' + (pi + 1) + ' of ' + personas.length + ' personas');
       }
@@ -349,7 +388,8 @@
       }
     }
 
+    try { await frame.setMetadata('jmb', { connectorIds }); } catch (e) { /* metadata is optional */ }
     await board.viewport.zoomTo(frame);
-    return frame;
+    return { frame, connectorIds };
   };
 })();
