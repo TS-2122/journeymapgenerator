@@ -202,9 +202,8 @@
         <button class="add" type="button" data-act="row-add">Add custom row</button></div>
       <div class="fld"><span class="lbl">Your data</span>
         <div class="toolgrid">
-          ${confirmBtn('sample', 'Load ITAM sample', 'Replace my work?')}
+          ${confirmBtn('sample', 'Load sample', 'Replace my work?')}
           <button class="bs sm" type="button" data-act="paste-open">Paste from spreadsheet</button>
-          <button class="bs sm" type="button" data-act="export">Save to file</button>
           <label class="bs sm filebtn">Open file<input type="file" accept=".json,application/json" data-act-change="import" hidden></label>
           ${confirmBtn('reset', 'Start over', 'Clear everything?')}
         </div>
