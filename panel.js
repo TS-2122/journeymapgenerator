@@ -4,6 +4,7 @@
   const KEY = 'jmb-state-v1';
   const PALETTE = ['#2E3FB8', '#2F7D32', '#D9731A', '#7040C4', '#B3261E', '#00838F', '#6D4C41', '#455A64'];
   const DEFAULT_EMOJIS = ['\u{1F623}', '\u{1F615}', '\u{1F610}', '\u{1F642}', '\u{1F604}'];
+  const EMOJI_CHOICES = ['\u{1F621}', '\u{1F620}', '\u{1F62D}', '\u{1F622}', '\u{1F623}', '\u{1F629}', '\u{1F61E}', '\u{1F615}', '\u{1F641}', '\u{1F610}', '\u{1F611}', '\u{1F636}', '\u{1F642}', '\u{1F60A}', '\u{1F600}', '\u{1F604}', '\u{1F601}', '\u{1F60D}', '\u{1F929}', '\u{1F973}'];
   const SCALE_LABELS = ['Very negative', 'Negative', 'Neutral', 'Positive', 'Very positive'];
   const STEPS = ['Details', 'Personas', 'Stages', 'Content', 'Feelings'];
   const TITLES = [
@@ -148,7 +149,7 @@
 
   let S = load();
   const ui = { step: 1, stage: 0, persona: null, collapsed: {}, paste: false, pasteErr: '',
-    status: '', busy: false, focus: null, confirm: null };
+    status: '', busy: false, emojiSlot: null, focus: null, confirm: null };
   const root = document.getElementById('app');
 
   // ---------- views ----------
@@ -249,7 +250,7 @@
     let body = '';
     if (open) {
       body = items.map((it, j) => {
-        const chips = row.kind === 'actions' && S.personas.length
+        const chips = S.personas.length
           ? `<div class="chips">${S.personas.map((p) => {
               const on = (it.personas || []).includes(p.id);
               const style = on ? `background:${p.color};border-color:${p.color}` : '';
@@ -284,7 +285,15 @@
   }
 
   function vFeelings() {
-    const slots = S.emojis.map((e, k) => `<div class="emo-slot"><input data-bind="emojis.${k}" data-rerender value="${esc(e)}" aria-label="Emoji for ${k + 1}, ${SCALE_LABELS[k]}"><b>${k + 1}</b><span>${SCALE_LABELS[k]}</span></div>`).join('');
+    const slots = S.emojis.map((e, k) => `<button type="button" class="emo-slot${ui.emojiSlot === k ? ' on' : ''}" data-act="emoji-slot" data-v="${k}" aria-label="Change emoji for ${k + 1}, ${SCALE_LABELS[k]}" aria-expanded="${ui.emojiSlot === k}"><span class="em">${esc(e)}</span><b>${k + 1}</b><span>${SCALE_LABELS[k]}</span></button>`).join('');
+    let picker = '';
+    if (ui.emojiSlot != null) {
+      const k = ui.emojiSlot;
+      const opts = EMOJI_CHOICES.map((e) => `<button type="button" class="eb${S.emojis[k] === e ? ' on' : ''}" data-act="emoji-pick" data-v="${e}" aria-label="Use ${e}">${e}</button>`).join('');
+      picker = `<div class="picker"><div class="lblrow"><span class="lbl">Emoji for ${k + 1}, ${SCALE_LABELS[k]}</span><button class="linkbtn" type="button" data-act="emoji-default">Reset to default</button></div>
+        <div class="emo-choices">${opts}</div>
+        <div class="inline"><input class="in" id="emoji-custom" placeholder="Or type or paste any emoji" aria-label="Custom emoji"><button class="bs sm" type="button" data-act="emoji-custom">Use</button><button class="bs sm" type="button" data-act="emoji-done">Done</button></div></div>`;
+    }
     let rest = '';
     if (!S.personas.length || !S.stages.length) {
       rest = '<div class="empty">Add personas and stages first, then rate them here.</div>';
@@ -313,8 +322,8 @@
       rest = `<div class="fld"><span class="lbl">Rate a persona</span><div class="pchips">${chips}</div></div>
         <div class="stack">${rows}</div>${vPreview(p, r)}`;
     }
-    return `<div class="fld"><div class="lblrow"><span class="lbl">Emoji scale</span><span class="hint nm">Type or paste any emoji</span></div>
-      <div class="emo-grid">${slots}</div></div>${rest}`;
+    return `<div class="fld"><div class="lblrow"><span class="lbl">Emoji scale</span><span class="hint nm">Tap one to change it</span></div>
+      <div class="emo-grid">${slots}</div>${picker}</div>${rest}`;
   }
 
   function vPreview(p, r) {
@@ -444,6 +453,15 @@
         break;
       }
 
+      case 'emoji-slot': ui.emojiSlot = ui.emojiSlot === +d.v ? null : +d.v; break;
+      case 'emoji-pick': S.emojis[ui.emojiSlot] = d.v; break;
+      case 'emoji-default': S.emojis[ui.emojiSlot] = DEFAULT_EMOJIS[ui.emojiSlot]; break;
+      case 'emoji-custom': {
+        const inp = root.querySelector('#emoji-custom'); const v = inp && inp.value.trim();
+        if (v) S.emojis[ui.emojiSlot] = Array.from(v).slice(0, 2).join('');
+        break;
+      }
+      case 'emoji-done': ui.emojiSlot = null; break;
       case 'rate-persona': ui.persona = d.pid; break;
       case 'rate': (S.ratings[ui.persona] = S.ratings[ui.persona] || {})[d.sid] = +d.v; break;
       case 'absent': {
@@ -506,6 +524,7 @@
   });
   root.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.id === 'tag-new') { e.preventDefault(); act('tag-add', {}, e.target); }
+    if (e.key === 'Enter' && e.target.id === 'emoji-custom') { e.preventDefault(); act('emoji-custom', {}, e.target); }
     if (e.key === 'Escape' && ui.paste) { ui.paste = false; render(); }
   });
 
