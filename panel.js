@@ -161,17 +161,26 @@
       return `<button type="button" class="${cls}" data-act="goto" data-v="${n}" aria-current="${n === ui.step ? 'step' : 'false'}"><span class="bar"></span><span class="sl">${s}</span></button>`;
     }).join('');
     const t = TITLES[ui.step - 1];
-    return `<header class="hd"><div class="hd-top"><span class="app">Journey Map Builder</span><span class="muted">Step ${ui.step} of 5</span></div>
-      <nav class="steps" aria-label="Steps">${steps}</nav><h1>${t[0]}</h1><p class="muted">${t[1]}</p></header>`;
+    return `<header class="hd"><div class="hd-top"><span class="app">Journey Map Builder</span>${confirmBtn('reset', 'New map', 'Clear current map?')}</div>
+      <nav class="steps" aria-label="Steps">${steps}</nav><div class="h1row"><h1>${t[0]}</h1><span class="muted">Step ${ui.step} of 5</span></div><p class="muted">${t[1]}</p></header>`;
   }
 
   function footer() {
+    const linked = !!(S.link && S.link.frameId);
     const back = ui.step > 1 ? '<button class="bs" type="button" data-act="back">Back</button>' : '';
-    const next = ui.step < 5
-      ? `<button class="bp" type="button" data-act="next">Next: ${STEPS[ui.step]}</button>`
-      : `<button class="bp" type="button" data-act="generate" ${ui.busy ? 'disabled' : ''}>${ui.busy ? 'Building map...' : 'Generate map on board'}</button>`;
+    let next;
+    if (ui.step < 5) next = `<button class="bp" type="button" data-act="next">Next: ${STEPS[ui.step]}</button>`;
+    else if (ui.busy) next = '<button class="bp" type="button" disabled>Working...</button>';
+    else if (linked) next = `<button class="bp" type="button" data-act="update">${ui.confirm === 'update' ? 'Replace the map on the board?' : 'Update map on board'}</button>`;
+    else next = '<button class="bp" type="button" data-act="generate">Generate map on board</button>';
+    let strip = '';
+    if (linked && !ui.busy) {
+      strip = ui.step < 5
+        ? `<div class="linkbar"><span>This map is on the board.</span><button class="bs sm" type="button" data-act="update">${ui.confirm === 'update' ? 'Replace it?' : 'Update map'}</button></div>`
+        : '<div class="linkbar"><span>Want a separate copy instead?</span><button class="bs sm" type="button" data-act="generate">Generate new map</button></div>';
+    }
     const status = ui.status ? `<div class="status" role="status">${esc(ui.status)}</div>` : '';
-    return `${status}<footer class="ft">${back}${next}</footer>`;
+    return `${status}${strip}<footer class="ft">${back}${next}</footer>`;
   }
 
   function confirmBtn(act, label, confirmLabel) {
@@ -205,7 +214,6 @@
           ${confirmBtn('sample', 'Load sample', 'Replace my work?')}
           <button class="bs sm" type="button" data-act="paste-open">Paste from spreadsheet</button>
           <label class="bs sm filebtn">Open file<input type="file" accept=".json,application/json" data-act-change="import" hidden></label>
-          ${confirmBtn('reset', 'Start over', 'Clear everything?')}
         </div>
         <p class="hint">Your work saves automatically in this browser.</p></div>`;
   }
@@ -368,21 +376,50 @@
 
   // ---------- actions ----------
 
+  const sayStatus = (msg) => {
+    ui.status = msg;
+    const el = root.querySelector('.status'); if (el) el.textContent = msg;
+  };
+
+  function canBuild() {
+    if (!window.miro || !miro.board) { ui.status = 'Open this panel inside Miro to build the map.'; return false; }
+    if (!S.stages.length) { ui.status = 'Add at least one stage first.'; return false; }
+    return true;
+  }
+
   async function generate() {
-    if (!window.miro || !miro.board) {
-      ui.status = 'Open this panel inside Miro to generate the map.'; render(); return;
-    }
-    if (!S.stages.length) { ui.status = 'Add at least one stage before generating.'; render(); return; }
+    if (!canBuild()) { render(); return; }
     ui.busy = true; ui.status = 'Starting...'; render();
     try {
-      await window.JMB_generate(S, (msg) => {
-        ui.status = msg;
-        const el = root.querySelector('.status'); if (el) el.textContent = msg;
-      });
-      ui.status = 'Map added to the board.';
+      const res = await window.JMB_generate(S, sayStatus);
+      S.link = { frameId: res.frame.id, connectorIds: res.connectorIds };
+      save();
+      ui.status = 'Map added to the board. Use "Update map" to change it from now on.';
     } catch (err) {
       console.error(err);
       ui.status = 'The map stopped partway: ' + ((err && err.message) || err) + '. Delete the partial frame and try again.';
+    }
+    ui.busy = false; render();
+  }
+
+  async function update() {
+    if (!canBuild()) { render(); return; }
+    ui.busy = true; ui.status = 'Finding the map...'; render();
+    try {
+      const frame = await window.JMB_findMap(S.link && S.link.frameId);
+      if (!frame) {
+        S.link = null; save();
+        ui.status = 'The map is no longer on this board. Select it on the board and try again, or generate a new one.';
+      } else {
+        const origin = await window.JMB_removeMap(frame, S.link && S.link.connectorIds, sayStatus);
+        const res = await window.JMB_generate(S, sayStatus, { origin });
+        S.link = { frameId: res.frame.id, connectorIds: res.connectorIds };
+        save();
+        ui.status = 'Map updated.';
+      }
+    } catch (err) {
+      console.error(err);
+      ui.status = 'The update stopped partway: ' + ((err && err.message) || err) + '.';
     }
     ui.busy = false; render();
   }
@@ -474,7 +511,7 @@
         S = fromSample(window.JMB_SAMPLE); ui.confirm = null; ui.stage = 0; ui.status = 'Sample loaded.'; break;
       case 'reset':
         if (ui.confirm !== 'reset') { ui.confirm = 'reset'; break; }
-        S = blank(); ui.confirm = null; ui.stage = 0; ui.status = ''; break;
+        S = blank(); ui.confirm = null; ui.stage = 0; ui.step = 1; ui.persona = null; ui.emojiSlot = null; ui.status = 'New map started.'; ui.focus = '#f-title'; break;
 
       case 'paste-open': ui.paste = true; ui.pasteErr = ''; ui.focus = '#paste-box'; break;
       case 'paste-close': ui.paste = false; break;
@@ -497,7 +534,10 @@
         };
         rd.readAsText(f); return;
       }
-      case 'generate': generate(); return;
+      case 'generate': ui.confirm = null; generate(); return;
+      case 'update':
+        if (ui.confirm !== 'update') { ui.confirm = 'update'; render(); return; }
+        ui.confirm = null; update(); return;
       default: return;
     }
     save(); render();
