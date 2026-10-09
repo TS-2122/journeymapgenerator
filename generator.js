@@ -126,10 +126,9 @@
     }
     try {
       const sel = await board.getSelection();
-      for (const it of sel) {
-        if (it.type !== 'frame') continue;
-        try { if (await it.getMetadata('jmb')) return it; } catch (e) { /* not ours */ }
-      }
+      // A frame the person selected on purpose is taken as the map to update.
+      const f = sel.find((it) => it.type === 'frame');
+      if (f) return f;
     } catch (e) { /* no selection */ }
     return null;
   };
@@ -138,7 +137,7 @@
   window.JMB_removeMap = async function (frame, connectorIds, say) {
     const board = miro.board;
     let ids = connectorIds || [];
-    try { const m = await frame.getMetadata('jmb'); if (m && m.connectorIds) ids = ids.concat(m.connectorIds); } catch (e) { /* none */ }
+    try { const m = await board.getAppData('jmb:' + frame.id); if (m && m.connectorIds) ids = ids.concat(m.connectorIds); } catch (e) { /* none */ }
     const jobs = [];
     [...new Set(ids)].forEach((id) => jobs.push(async () => {
       try { const c = await board.getById(id); if (c) await board.remove(c); } catch (e) { /* already gone */ }
@@ -401,7 +400,10 @@
       }
     }
 
-    await safe('tag', () => frame.setMetadata('jmb', { connectorIds }));
+    // Remember which lines belong to this map so an update can clear them. Miro does not
+    // allow app data on frames, so it is stored on the board instead. This is optional:
+    // if the board refuses it, the panel's own saved copy is used.
+    try { await board.setAppData('jmb:' + frame.id, { connectorIds }); } catch (e) { /* optional */ }
     await safe('zoom', () => board.viewport.zoomTo(frame));
     return { frame, connectorIds, errors };
   };
