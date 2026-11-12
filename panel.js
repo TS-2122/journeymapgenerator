@@ -205,7 +205,7 @@
       <div class="fld"><label class="lbl" for="f-foot">Footer text</label><input class="in" id="f-foot" data-bind="footer" value="${esc(S.footer)}" placeholder="e.g. DTMB Office of Continuous Improvement"></div>
       <div class="inline top">
         <div class="fld grow"><label class="lbl" for="f-proj">Project</label><input class="in" id="f-proj" data-bind="project" value="${esc(S.project)}"></div>
-        <div class="fld w110"><label class="lbl" for="f-date">Date</label><input class="in" id="f-date" data-bind="date" value="${esc(S.date)}"></div>
+        <div class="fld w150"><label class="lbl" for="f-date">Date</label><input class="in" id="f-date" type="date" data-bind="date" value="${/^\d{4}-\d{2}-\d{2}$/.test(S.date) ? esc(S.date) : ''}"></div>
       </div>
       <div class="fld"><span class="lbl">Rows on the map</span><div class="stack">${rows}</div>
         <button class="add" type="button" data-act="row-add">Add custom row</button></div>
@@ -382,9 +382,15 @@
   };
 
   function doneMsg(res, ok) {
-    if (!res.errors || !res.errors.length) return ok;
-    return 'Map built, but ' + res.errors.length + ' piece' + (res.errors.length === 1 ? '' : 's') +
-      ' could not be added. First problem: ' + res.errors[0] + '. You can fix the content and click Update map.';
+    const msgs = [];
+    if (res.errors && res.errors.length) {
+      msgs.push(res.errors.length + ' piece' + (res.errors.length === 1 ? '' : 's') + ' could not be added. First problem: ' + res.errors[0] + '.');
+    }
+    if (res.outside) {
+      msgs.push('Everything was drawn, but ' + res.outside + ' items could not be attached to the map frame, so they will not move with it. ' +
+        'This happens when an older map frame is still sitting underneath. Delete any leftover frames in that spot, then click Update map.');
+    }
+    return msgs.length ? 'Map built. ' + msgs.join(' ') : ok;
   }
 
   function canBuild() {
