@@ -6,12 +6,12 @@
 
   const L = {
     labelW: 170,     // left column with row names
-    stageW: 300,     // width of each stage column
+    stageW: 360,     // width of each stage column (widened per map when needed)
     pad: 12,         // padding inside each cell
     gap: 8,          // space between cards
     headerH: 124,
     personaH: 52,
-    stageH: 84,
+    stageH: 96,
     footerH: 52,
     feelH: 300,
     font: 12,
@@ -79,21 +79,35 @@
     return Math.max(1, n);
   }
 
-  // Works out the pieces of one card: where the text sits, how wide it can be,
-  // and the column of persona pills on the right.
+  // Works out the pieces of one card: where the text sits, how wide it can be, and
+  // where the persona pills go. One or two pills sit in a column on the right; three or
+  // more wrap in a strip under the text so the card doesn't get very tall.
   function cardLayout(item, kind, personas) {
     const k = KIND[kind] || KIND.note;
     const cw = L.stageW - 2 * L.pad;
-    const pills = kind === 'actions' ? [] : cardPersonas(item, personas);
-    const pillCol = pills.length ? Math.max(...pills.map((p) => pillW(p.name))) + 10 : 0;
+    const pills = cardPersonas(item, personas);
+    const side = pills.length > 0 && pills.length <= 2;
+    const pillCol = side ? Math.max(...pills.map((p) => pillW(p.name))) + 10 : 0;
     const symW = k.prefix ? SYM_W : 0;
     const textX = 10 + symW;
     const textWidth = cw - textX - 10 - pillCol;
     const lines = wrapCount(item.text, textWidth);
     const textH = Math.ceil(lines * L.font * 1.45);
-    const pillsH = pills.length ? pills.length * PILL_H + (pills.length - 1) * PILL_GAP : 0;
-    const h = Math.max(36, Math.max(textH, pillsH) + 18);
-    return { k, cw, pills, pillCol, symW, textX, textWidth, h };
+    let strip = [];
+    if (!side && pills.length) {
+      const maxW = cw - 20;
+      let row = [], x = 0;
+      pills.forEach((p) => {
+        const w = pillW(p.name);
+        if (row.length && x + w > maxW) { strip.push(row); row = []; x = 0; }
+        row.push({ p, x, w }); x += w + PILL_GAP;
+      });
+      strip.push(row);
+    }
+    const stripH = strip.length ? strip.length * PILL_H + (strip.length - 1) * PILL_GAP + 8 : 0;
+    const sideH = side ? pills.length * PILL_H + (pills.length - 1) * PILL_GAP : 0;
+    const h = Math.max(36, Math.max(textH, sideH) + stripH + 18);
+    return { k, cw, pills, side, strip, stripH, textH, pillCol, symW, textX, textWidth, h };
   }
 
   function stageTags(stage, personas, rowKey) {
@@ -133,21 +147,50 @@
     return null;
   };
 
-  // Deletes an existing map: its connectors, everything inside the frame, then the frame.
+  // Deletes an existing map. Lines go first, one at a time, because Miro deletes a line
+  // on its own when the shape it is attached to is removed, and removing the same line
+  // twice raises an error. Every removal is wrapped so a stray error can't stop the update.
+  const tryRemove = async (board, item) => {
+    try { await board.remove(item); return true; } catch (e) { console.warn('skip remove', e); return false; }
+  };
+
   window.JMB_removeMap = async function (frame, connectorIds, say) {
     const board = miro.board;
     let ids = connectorIds || [];
     try { const m = await board.getAppData('jmb:' + frame.id); if (m && m.connectorIds) ids = ids.concat(m.connectorIds); } catch (e) { /* none */ }
-    const jobs = [];
-    [...new Set(ids)].forEach((id) => jobs.push(async () => {
-      try { const c = await board.getById(id); if (c) await board.remove(c); } catch (e) { /* already gone */ }
-    }));
+    ids = [...new Set(ids)];
+    const box = { x: frame.x - frame.width / 2, y: frame.y - frame.height / 2 };
+
+    // Lines inside the old map area that were not on the saved list (for example from a
+    // map built by an older version) are found by position.
+    try {
+      const lines = await board.get({ type: 'connector' });
+      const inBox = (it) => it && it.x >= box.x && it.x <= box.x + frame.width && it.y >= box.y && it.y <= box.y + frame.height;
+      for (const ln of lines) {
+        if (!ids.includes(ln.id) && ln.start && ln.start.item) {
+          try {
+            const a = await board.getById(ln.start.item);
+            if (a && frame.childrenIds && frame.childrenIds.includes(a.id)) ids.push(ln.id);
+            else if (inBox(a)) ids.push(ln.id);
+          } catch (e) { /* endpoint gone */ }
+        }
+      }
+    } catch (e) { /* listing lines is optional */ }
+
+    let n = 0;
+    for (const id of ids) {
+      n++;
+      if (say && n % 5 === 0) say('Clearing old lines... ' + n + ' of ' + ids.length);
+      try { const c = await board.getById(id); if (c) await tryRemove(board, c); } catch (e) { /* already gone */ }
+    }
+
     let kids = [];
     try { kids = await frame.getChildren(); } catch (e) { /* none */ }
-    kids.forEach((k) => jobs.push(() => board.remove(k).catch(() => null)));
+    kids = kids.filter((k) => k && k.type !== 'connector');
+    const jobs = kids.map((k) => () => tryRemove(board, k));
     await runAll(jobs, 6, (d, t) => say && say('Clearing old map... ' + d + ' of ' + t));
-    const box = { x: frame.x - frame.width / 2, y: frame.y - frame.height / 2 };
-    await board.remove(frame).catch(() => null);
+    await tryRemove(board, frame);
+    try { if (await board.getById(frame.id)) await tryRemove(board, frame); } catch (e) { /* gone */ }
     return box;
   };
 
@@ -159,6 +202,15 @@
     const stages = S.stages;
     const personas = S.personas.filter((p) => p.name.trim());
     const n = stages.length;
+    // Widen the columns when many personas share a rating in one stage, so their
+    // emoji circles can sit side by side without covering each other.
+    let maxCluster = 1;
+    stages.forEach((st) => {
+      const counts = {};
+      personas.forEach((p) => { const v = S.ratings && S.ratings[p.id] && S.ratings[p.id][st.id]; if (v) counts[v] = (counts[v] || 0) + 1; });
+      Object.values(counts).forEach((c) => { maxCluster = Math.max(maxCluster, c); });
+    });
+    L.stageW = Math.max(360, maxCluster * (L.emojiD + 10) + 40);
     const totalW = L.labelW + n * L.stageW;
 
     // Work out each row's height from its fullest stage.
@@ -168,7 +220,6 @@
       stages.forEach((s) => {
         const items = (s.cells[r.key] || []).filter((i) => i.text.trim());
         let h = L.pad * 2;
-        if (r.kind === 'actions' && stageTags(s, personas, r.key).length) h += L.tagH + L.gap;
         items.forEach((i) => { h += cardLayout(i, r.kind, personas).h + L.gap; });
         max = Math.max(max, h);
       });
@@ -306,21 +357,10 @@
         const cx = ox + L.labelW + si * L.stageW + L.pad;
         const cw = L.stageW - 2 * L.pad;
         let cy = top + L.pad;
-        if (r.kind === 'actions') {
-          const tags = stageTags(s, personas, r.key);
-          let tagX = cx;
-          tags.forEach((p) => {
-            const w = textW(p.name, 11);
-            fg.push(shape(tagX, cy, w, 22,
-              { fillColor: tint(p.color, 0.85), borderColor: tint(p.color, 0.6), color: p.color, fontSize: 11, textAlign: 'center', textAlignVertical: 'middle' },
-              '<strong>' + esc(p.name) + '</strong>', 'round_rectangle'));
-            tagX += w + 6;
-          });
-          if (tags.length) cy += L.tagH + L.gap;
-        }
         (s.cells[r.key] || []).filter((i) => i.text.trim()).forEach((item) => {
           const c = cardLayout(item, r.kind, personas);
-          const top = cy, mid = cy + c.h / 2;
+          const top = cy;
+          const mid = c.strip.length ? top + 9 + Math.max(c.textH, 16) / 2 : top + c.h / 2;
           fg.push(async () => {
             const parts = [];
             parts.push(await shape(cx, top, c.cw, c.h,
@@ -331,16 +371,22 @@
             }
             parts.push(await text(cx + c.textX, mid, c.textWidth, esc(item.text).replace(/\n/g, '<br>'),
               { color: c.k.text, fontSize: L.font, textAlign: 'left' })());
-            if (c.pills.length) {
-              const colX = cx + c.cw - 10 - (c.pillCol - 10);
-              let py = mid - ((c.pills.length * PILL_H + (c.pills.length - 1) * PILL_GAP) / 2);
+            const pill = (x, y, p, w) => shape(x, y, w, PILL_H,
+              { fillColor: tint(p.color, 0.85), borderColor: tint(p.color, 0.6), color: p.color, fontSize: 10, textAlign: 'center', textAlignVertical: 'middle' },
+              '<strong>' + esc(p.name) + '</strong>', 'round_rectangle')();
+            if (c.side) {
+              const colX = cx + c.cw - c.pillCol;
+              let py = top + c.h / 2 - (c.pills.length * PILL_H + (c.pills.length - 1) * PILL_GAP) / 2;
               for (const p of c.pills) {
                 const w = pillW(p.name);
-                parts.push(await shape(colX + (c.pillCol - 10 - w), py, w, PILL_H,
-                  { fillColor: tint(p.color, 0.85), borderColor: tint(p.color, 0.6), color: p.color, fontSize: 10, textAlign: 'center', textAlignVertical: 'middle' },
-                  '<strong>' + esc(p.name) + '</strong>', 'round_rectangle')());
+                parts.push(await pill(colX + (c.pillCol - 10 - w), py, p, w));
                 py += PILL_H + PILL_GAP;
               }
+            }
+            let sy = top + c.h - c.stripH + 2;
+            for (const row of c.strip) {
+              for (const { p, x, w } of row) parts.push(await pill(cx + 10 + x, sy, p, w));
+              sy += PILL_H + PILL_GAP;
             }
             const ok = parts.filter(Boolean);
             if (ok.length > 1) groups.push(ok);
@@ -365,7 +411,19 @@
       ], 2);
       await connect(a1, a2, { strokeColor: '#9AA5B4', strokeWidth: 2, strokeStyle: 'dashed', startStrokeCap: 'none', endStrokeCap: 'none' }, 'straight');
 
-      const spread = personas.length > 1 ? 16 : 0;
+      // For each stage, personas with the same rating sit side by side, centered in the column.
+      const slot = {};
+      stages.forEach((st) => {
+        const byLevel = {};
+        personas.forEach((p) => {
+          const v = S.ratings && S.ratings[p.id] && S.ratings[p.id][st.id];
+          if (v) (byLevel[v] = byLevel[v] || []).push(p.id);
+        });
+        Object.values(byLevel).forEach((ids) => {
+          ids.forEach((id, k) => { slot[st.id + '|' + id] = k - (ids.length - 1) / 2; });
+        });
+      });
+      const step = L.emojiD + 10;
       for (let pi = 0; pi < personas.length; pi++) {
         const p = personas[pi];
         const r = (S.ratings && S.ratings[p.id]) || {};
@@ -373,7 +431,7 @@
         stages.forEach((s, si) => {
           const v = r[s.id];
           if (!v) return;
-          const cx = ox + L.labelW + si * L.stageW + L.stageW / 2 + (pi - (personas.length - 1) / 2) * spread;
+          const cx = ox + L.labelW + si * L.stageW + L.stageW / 2 + (slot[s.id + '|' + p.id] || 0) * step;
           const cy = feel.level(v);
           jobs.push(shape(cx - L.emojiD / 2, cy - L.emojiD / 2, L.emojiD, L.emojiD,
             { fillColor: '#FFFFFF', borderColor: p.color, borderWidth: 3, fontSize: 20, textAlign: 'center', textAlignVertical: 'middle' },
@@ -389,8 +447,12 @@
 
     // Put everything inside the frame so it moves as one piece.
     say('Grouping into frame...');
+    let outside = 0, outsideMsg = '';
     for (let i = 0; i < created.length; i += 20) {
-      await Promise.all(created.slice(i, i + 20).map((it) => safe('frame', () => frame.add(it))));
+      await Promise.all(created.slice(i, i + 20).map(async (it) => {
+        if (it.parentId === frame.id) return;
+        try { await frame.add(it); } catch (e) { outside++; if (!outsideMsg) outsideMsg = (e && e.message) || String(e); }
+      }));
     }
 
     // Group each card with its persona pills so they move together.
@@ -405,6 +467,6 @@
     // if the board refuses it, the panel's own saved copy is used.
     try { await board.setAppData('jmb:' + frame.id, { connectorIds }); } catch (e) { /* optional */ }
     await safe('zoom', () => board.viewport.zoomTo(frame));
-    return { frame, connectorIds, errors };
+    return { frame, connectorIds, errors, outside, outsideMsg };
   };
 })();
